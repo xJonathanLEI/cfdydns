@@ -18,7 +18,7 @@ The recommended way of using `cfdydns` is through containers. Built containers a
 You may also install the binary directly. With the Rust toolchain installed:
 
 ```console
-cargo install --locked --path .
+cargo install --locked cfdydns
 ```
 
 ## Getting started
