@@ -4,13 +4,15 @@
 
 **Cloudflare dynamic DNS client**
 
+[![crates-badge](https://img.shields.io/crates/v/cfdydns.svg)](https://crates.io/crates/cfdydns)
+
 A simplistic dynamic DNS client that only works with Cloudflare, for only one domain. It's easily configurable via environment variables, making it an ideal choice to use in containers.
 
 ## Installation
 
 The recommended way of using `cfdydns` is through containers. Built containers are available in:
 
-- GitHub Container Registry: `ghcr.io/xjonathanlei/cfdydns:latest`
+- [GitHub Container Registry](https://github.com/xJonathanLEI/cfdydns/pkgs/container/cfdydns): `ghcr.io/xjonathanlei/cfdydns:latest`
 - [Docker Hub](https://hub.docker.com/r/xjonathanlei/cfdydns): `xjonathanlei/cfdydns:latest`
 
 You may also install the binary directly. With the Rust toolchain installed:
