@@ -1,0 +1,204 @@
+name: "Release"
+
+on:
+  create:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  crate-info:
+    name: "Extract crate info"
+    runs-on: "ubuntu-latest"
+    outputs:
+      version: ${{ steps.derive.outputs.version }}
+
+    steps:
+      - id: "derive"
+        name: "Derive crate info from Git tag"
+        run: |
+          FULL_REF="${{ github.ref }}"
+          REGEX="^refs\/tags\/v(.*)$"
+          [[ $FULL_REF =~ $REGEX ]];
+
+          echo "version=${BASH_REMATCH[1]}" >> $GITHUB_OUTPUT
+
+  crate-version-check:
+    name: "Check crate version"
+    runs-on: "ubuntu-latest"
+    needs:
+      - "crate-info"
+
+    steps:
+      - name: "Checkout source code"
+        uses: "actions/checkout@v3"
+
+      - name: "Check against Cargo.toml"
+        run: |
+          GREP_OUTPUT=$(cat Cargo.toml | grep "^version = \"${{ needs.crate-info.outputs.version }}\"$")
+
+          if [ -z "$GREP_OUTPUT" ]; then
+            echo "Crate version mismatch"
+            exit 1
+          fi
+
+  build:
+    name: "Build for ${{ matrix.os }}"
+    runs-on: "${{ matrix.os }}"
+    needs:
+      - "crate-info"
+
+    strategy:
+      matrix:
+        os:
+          - "ubuntu-latest"
+          - "windows-latest"
+          - "macos-latest"
+
+    steps:
+      - name: "Checkout source code"
+        uses: "actions/checkout@v3"
+
+      - name: "Setup stable toolchain"
+        uses: "actions-rs/toolchain@v1"
+        with:
+          toolchain: "stable"
+          profile: "minimal"
+          override: true
+
+      - name: "Build crate"
+        run: |
+          cargo build --all --all-targets
+
+  docker-build:
+    name: "Build Docker image for ${{ matrix.platform }}"
+    runs-on: "ubuntu-latest"
+    needs:
+      - "crate-info"
+      - "build"
+
+    strategy:
+      matrix:
+        include:
+          - tag: "amd64"
+            platform: "linux/amd64"
+          - tag: "arm64"
+            platform: "linux/arm64/v8"
+
+    steps:
+      - name: "Checkout"
+        uses: "actions/checkout@v3"
+
+      - name: "Set up Docker Buildx"
+        run: |
+          docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+          sudo systemctl restart docker
+          docker buildx create --name multi_builder
+          docker buildx use multi_builder
+
+      - name: "Build Docker image"
+        run: |
+          docker buildx build --platform ${{ matrix.platform }} -t ${{ matrix.tag }} --output=type=docker -f ./Dockerfile .
+
+      - name: "Export Docker image"
+        run: |
+          docker save ${{ matrix.tag }} | gzip > /tmp/${{ matrix.tag }}.tar.gz
+
+      - name: "Upload Docker image artifact"
+        uses: "actions/upload-artifact@v3"
+        with:
+          name: "${{ matrix.tag }}.tar.gz"
+          path: "/tmp/${{ matrix.tag }}.tar.gz"
+
+  docker-push:
+    name: "Push Docker images to ${{ matrix.name }}"
+    runs-on: "ubuntu-latest"
+    needs:
+      - "crate-info"
+      - "docker-build"
+
+    strategy:
+      matrix:
+        include:
+          - name: "GHCR"
+            prefix: "ghcr.io/"
+            registry: "ghcr.io"
+            username: "GITHUB_TOKEN"
+            password: "GITHUB_TOKEN"
+          - name: "Docker Hub"
+            prefix: ""
+            registry: ~
+            username: "DOCKERHUB_USERNAME"
+            password: "DOCKERHUB_PASSWORD"
+
+    permissions:
+      contents: "read"
+      packages: "write"
+
+    env:
+      DOCKER_REPOSITORY: "xjonathanlei/cfdydns"
+
+    steps:
+      - name: "Download linux/amd64 image"
+        uses: "actions/download-artifact@v3"
+        with:
+          name: "amd64.tar.gz"
+          path: "/tmp/"
+
+      - name: "Download linux/arm64/v8 image"
+        uses: "actions/download-artifact@v3"
+        with:
+          name: "arm64.tar.gz"
+          path: "/tmp/"
+
+      - name: "Load Docker images"
+        run: |
+          docker load < /tmp/amd64.tar.gz
+          docker load < /tmp/arm64.tar.gz
+
+      - name: "Login to container registry"
+        uses: "docker/login-action@v1.6.0"
+        with:
+          registry: "${{ matrix.registry }}"
+          username: "${{ secrets[matrix.username] }}"
+          password: "${{ secrets[matrix.password] }}"
+
+      - name: "Tag images"
+        run: |
+          docker tag amd64 ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }}-amd64
+          docker tag arm64 ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }}-arm64
+
+      - name: "Push Docker images"
+        run: |
+          docker push ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }}-amd64
+          docker push ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }}-arm64
+          docker manifest create ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }} \
+            ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }}-amd64 \
+            ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }}-arm64
+          docker manifest create ${{ matrix.prefix }}${DOCKER_REPOSITORY}:latest \
+            ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }}-amd64 \
+            ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }}-arm64
+          docker manifest push ${{ matrix.prefix }}${DOCKER_REPOSITORY}:${{ needs.crate-info.outputs.version }}
+          docker manifest push ${{ matrix.prefix }}${DOCKER_REPOSITORY}:latest
+
+  crates-io-release:
+    name: "Release to crates.io"
+    runs-on: "ubuntu-latest"
+
+    needs:
+      - "crate-info"
+      - "crate-version-check"
+      - "build"
+      - "docker-build"
+      - "docker-push"
+
+    steps:
+      - name: "Checkout source code"
+        uses: "actions/checkout@v3"
+
+      - name: "Login to crates.io"
+        run: |
+          cargo login ${{ secrets.CRATES_IO_API_TOKEN }}
+
+      - name: "Public crate"
+        run: |
+          cargo publish

@@ -8,7 +8,12 @@ A simplistic dynamic DNS client that only works with Cloudflare, for only one do
 
 ## Installation
 
-With the Rust toolchain installed:
+The recommended way of using `cfdydns` is through containers. Built containers are available in:
+
+- GitHub Container Registry: `ghcr.io/xjonathanlei/cfdydns:latest`
+- [Docker Hub](https://hub.docker.com/r/xjonathanlei/cfdydns): `xjonathanlei/cfdydns:latest`
+
+You may also install the binary directly. With the Rust toolchain installed:
 
 ```console
 cargo install --locked --path .
